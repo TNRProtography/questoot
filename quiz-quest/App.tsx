@@ -1,12 +1,12 @@
-
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { GamePhase, type Player, type Question, type GameState, type PlayerAnswer } from './types';
 import { GAME_SETTINGS, SHAPES, SHAPE_COLORS, COLORS } from './constants';
-import { fetchQuizQuestions } from './services/geminiService';
+// fetchQuizQuestions is no longer needed on the client, as the server will handle it.
+// import { fetchQuizQuestions } from './services/geminiService';
 import Spinner from './components/Spinner';
 import ProgressBar from './components/ProgressBar';
 
-const LOCAL_STORAGE_PREFIX = 'quiz-quest-';
+// The generateGameCode function is now only used on the Host side initially.
 const generateGameCode = () => {
     const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
     let result = '';
@@ -16,84 +16,66 @@ const generateGameCode = () => {
     return result;
 };
 
-// --- Real-time Communication Abstraction (Simulated with localStorage) ---
-// In a real app, this would be replaced with a WebSocket or Firebase client.
 
-const useGameSync = (gameCode: string) => {
+// --- NEW: WebSocket Communication Hook (Replaces all localStorage logic) ---
+const useWebSocketGame = (gameCode: string | null) => {
     const [gameState, setGameState] = useState<GameState | null>(null);
-
-    const updateGameState = useCallback((newState: Partial<GameState>) => {
-        const key = `${LOCAL_STORAGE_PREFIX}${gameCode}`;
-        const existingState = JSON.parse(localStorage.getItem(key) || '{}') as GameState;
-        const updatedState = { ...existingState, ...newState, gameCode };
-        localStorage.setItem(key, JSON.stringify(updatedState));
-        // Manually trigger a storage event for the current window to react to its own changes
-        window.dispatchEvent(new StorageEvent('storage', { key, newValue: JSON.stringify(updatedState) }));
-    }, [gameCode]);
+    const socketRef = useRef<WebSocket | null>(null);
 
     useEffect(() => {
         if (!gameCode) return;
 
-        const key = `${LOCAL_STORAGE_PREFIX}${gameCode}`;
+        // Construct the WebSocket URL to connect to our Cloudflare Worker
+        const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsUrl = `${wsProtocol}//${window.location.host}/api/game/${gameCode}`;
+        
+        const socket = new WebSocket(wsUrl);
+        socketRef.current = socket;
 
-        const handleStorageChange = (event: StorageEvent) => {
-            if (event.key === key && event.newValue) {
-                setGameState(JSON.parse(event.newValue));
-            }
+        socket.onopen = () => {
+            console.log("WebSocket connected!");
+            // The client can send an initial message to request the current state
+            sendMessage('request_state', {});
         };
 
-        // Load initial state
-        const initialState = localStorage.getItem(key);
-        if (initialState) {
-            setGameState(JSON.parse(initialState));
-        }
+        socket.onmessage = (event) => {
+            const receivedState = JSON.parse(event.data);
+            setGameState(receivedState);
+        };
 
-        window.addEventListener('storage', handleStorageChange);
-        return () => window.removeEventListener('storage', handleStorageChange);
+        socket.onclose = () => console.log("WebSocket disconnected.");
+        socket.onerror = (error) => console.error("WebSocket error:", error);
+
+        // Cleanup on component unmount
+        return () => {
+            socket.close();
+        };
     }, [gameCode]);
 
-    return { gameState, updateGameState };
-};
+    // Function to send messages to the server (Durable Object)
+    const sendMessage = (type: string, payload: any) => {
+        if (socketRef.current?.readyState === WebSocket.OPEN) {
+            socketRef.current.send(JSON.stringify({ type, payload }));
+        } else {
+            console.error("Cannot send message, WebSocket is not open.");
+        }
+    };
 
-const addPlayerToGame = (gameCode: string, player: Player) => {
-    const key = `${LOCAL_STORAGE_PREFIX}${gameCode}`;
-    const gameState = JSON.parse(localStorage.getItem(key) || '{}') as GameState;
-    if (gameState.players && !gameState.players.find(p => p.name === player.name)) {
-        const newPlayers = [...gameState.players, player];
-        const updatedState = { ...gameState, players: newPlayers };
-        localStorage.setItem(key, JSON.stringify(updatedState));
-        window.dispatchEvent(new StorageEvent('storage', { key, newValue: JSON.stringify(updatedState) }));
-    }
-};
-
-const submitPlayerAnswer = (gameCode: string, questionIndex: number, answer: PlayerAnswer) => {
-    const key = `${LOCAL_STORAGE_PREFIX}${gameCode}`;
-    const gameState = JSON.parse(localStorage.getItem(key) || '{}') as GameState;
-    if (gameState.answers) {
-        const existingAnswers = gameState.answers[questionIndex] || [];
-        // Prevent duplicate answers
-        if (existingAnswers.find(a => a.playerName === answer.playerName)) return;
-        
-        const newAnswers = [...existingAnswers, answer];
-        const updatedAnswers = { ...gameState.answers, [questionIndex]: newAnswers };
-        const updatedState = { ...gameState, answers: updatedAnswers };
-        localStorage.setItem(key, JSON.stringify(updatedState));
-        window.dispatchEvent(new StorageEvent('storage', { key, newValue: JSON.stringify(updatedState) }));
-    }
+    return { gameState, sendMessage };
 };
 
 
 // --- Player Component ---
-
 const PlayerExperience: React.FC<{ gameCode: string }> = ({ gameCode }) => {
-    const { gameState } = useGameSync(gameCode);
+    // REPLACED: useGameSync is replaced with our new WebSocket hook
+    const { gameState, sendMessage } = useWebSocketGame(gameCode);
     const [playerName, setPlayerName] = useState<string>('');
     const [submitted, setSubmitted] = useState(false);
     const [error, setError] = useState('');
     
     const hasJoined = useMemo(() => {
         return !!gameState?.players.find(p => p.name === playerName);
-    }, [gameState, playerName]);
+    }, [gameState?.players, playerName]);
 
     const handleJoin = (e: React.FormEvent) => {
         e.preventDefault();
@@ -101,13 +83,25 @@ const PlayerExperience: React.FC<{ gameCode: string }> = ({ gameCode }) => {
             setError('Please enter a name.');
             return;
         }
-        if (!gameState) {
-            setError('Game not found. Check the code and try again.');
-            return;
-        }
-        addPlayerToGame(gameCode, { name: playerName, score: 0, isBot: false });
+        // Instead of writing to localStorage, we send a 'join' message to the server
+        sendMessage('join', { name: playerName });
         setSubmitted(true);
     };
+
+    // This effect handles the "Game not found" error.
+    // If we are submitted but the game state never loads, it means the game doesn't exist.
+    useEffect(() => {
+        if (submitted && !hasJoined) {
+            const timer = setTimeout(() => {
+                if (!gameState) {
+                     setError('Game not found. Check the code and try again.');
+                     setSubmitted(false); // Allow the user to try again
+                }
+            }, 3000); // Wait 3 seconds for a response
+            return () => clearTimeout(timer);
+        }
+    }, [submitted, gameState, hasJoined]);
+
 
     if (!submitted || !hasJoined) {
         return (
@@ -142,15 +136,15 @@ const PlayerExperience: React.FC<{ gameCode: string }> = ({ gameCode }) => {
     const playerAnswersForQuestion = gameState.answers[gameState.currentQuestionIndex] || [];
     const myAnswer = playerAnswersForQuestion.find(a => a.playerName === playerName);
     const myPlayer = gameState.players.find(p => p.name === playerName);
-    const timeRemaining = GAME_SETTINGS.questionTime - Math.floor((Date.now() - gameState.phaseStartTime) / 1000);
-
+    
     const handleAnswerSelect = (answerIndex: number) => {
-        if (myAnswer || timeRemaining <= 0) return;
-        const timeTaken = GAME_SETTINGS.questionTime - timeRemaining;
-        submitPlayerAnswer(gameCode, gameState.currentQuestionIndex, { playerName, answerIndex, timeTaken });
+        if (myAnswer) return;
+        // REPLACED: submitPlayerAnswer is now a 'answer' message to the server
+        sendMessage('answer', { answerIndex, playerName });
     };
     
     const renderContent = () => {
+        // ... (The rest of the rendering logic inside PlayerExperience remains largely the same)
         switch (gameState.gamePhase) {
             case GamePhase.LOBBY:
                 return <h2 className="text-3xl font-bold text-white">Welcome, {playerName}! Waiting for host to start...</h2>;
@@ -226,11 +220,15 @@ const PlayerExperience: React.FC<{ gameCode: string }> = ({ gameCode }) => {
 
 
 // --- Host Component ---
-
 const HostExperience: React.FC = () => {
-    const [gameCode, setGameCode] = useState('');
-    const { gameState, updateGameState } = useGameSync(gameCode);
-    const [timer, setTimer] = useState(0);
+    // Host now uses the state to manage the game code
+    const [gameCode, setGameCode] = useState<string | null>(null);
+    // REPLACED: useGameSync is replaced with our new WebSocket hook
+    const { gameState, sendMessage } = useWebSocketGame(gameCode);
+
+    // LOGIC MOVED: All timer and game phase progression logic (useEffect) has been removed.
+    // The server (Durable Object) is now the single source of truth for the game state
+    // and is responsible for all timers and advancing the game phase.
 
     const sortedPlayers = useMemo(() => {
         if (!gameState?.players) return [];
@@ -240,116 +238,16 @@ const HostExperience: React.FC = () => {
     const handleCreateGame = () => {
         const newGameCode = generateGameCode();
         setGameCode(newGameCode);
-        updateGameState({
-            gamePhase: GamePhase.LOBBY,
-            players: [],
-            questions: [],
-            currentQuestionIndex: 0,
-            phaseStartTime: Date.now(),
-            answers: {},
-        });
+        // The act of connecting to the WebSocket with this new code will "create" the game room.
+        // We can send an initial message to set up the game.
+        sendMessage('create', { gameCode: newGameCode });
     };
 
     const handleStartGame = async () => {
-        updateGameState({ gamePhase: GamePhase.LOADING_QUESTIONS, phaseStartTime: Date.now() });
-        const fetchedQuestions = await fetchQuizQuestions();
-        if (fetchedQuestions && fetchedQuestions.length > 0) {
-            const shuffledQuestions = [...fetchedQuestions].sort(() => Math.random() - 0.5);
-            updateGameState({
-                questions: shuffledQuestions,
-                currentQuestionIndex: 0,
-                gamePhase: GamePhase.QUESTION_INTRO,
-                phaseStartTime: Date.now()
-            });
-            setTimer(GAME_SETTINGS.introTime);
-        } else {
-            alert("Failed to load questions. Please try again.");
-            updateGameState({ gamePhase: GamePhase.LOBBY, phaseStartTime: Date.now() });
-        }
+        // REPLACED: updateGameState is now a 'start' message to the server
+        sendMessage('start', {});
     };
-    
-    const processAnswers = useCallback(() => {
-        if (!gameState || gameState.gamePhase !== GamePhase.QUESTION_ACTIVE) return;
 
-        const currentQuestion = gameState.questions[gameState.currentQuestionIndex];
-        const answersForQuestion = gameState.answers[gameState.currentQuestionIndex] || [];
-        
-        const updatedPlayers = gameState.players.map(player => {
-            const playerAnswer = answersForQuestion.find(a => a.playerName === player.name);
-            if (!playerAnswer) {
-                return { ...player, lastAnswerCorrect: false, lastScoreGained: 0 }; // Didn't answer
-            }
-            
-            const isCorrect = playerAnswer.answerIndex === currentQuestion.correctAnswerIndex;
-            const scoreGained = isCorrect ? Math.round(1000 * (1 - (playerAnswer.timeTaken / (GAME_SETTINGS.questionTime * 2)))) : 0;
-            
-            return { ...player, score: player.score + scoreGained, lastAnswerCorrect: isCorrect, lastScoreGained: scoreGained };
-        });
-
-        updateGameState({ players: updatedPlayers });
-
-    }, [gameState, updateGameState]);
-
-
-    useEffect(() => {
-        if (!gameState) return;
-        let interval: NodeJS.Timeout;
-
-        const timeInPhase = (Date.now() - gameState.phaseStartTime) / 1000;
-
-        switch (gameState.gamePhase) {
-            case GamePhase.QUESTION_INTRO:
-                if (timeInPhase >= GAME_SETTINGS.introTime) {
-                    updateGameState({ gamePhase: GamePhase.QUESTION_ACTIVE, phaseStartTime: Date.now() });
-                }
-                break;
-            case GamePhase.QUESTION_ACTIVE:
-                if (timeInPhase >= GAME_SETTINGS.questionTime) {
-                    processAnswers();
-                    updateGameState({ gamePhase: GamePhase.QUESTION_RESULT, phaseStartTime: Date.now() });
-                }
-                break;
-            case GamePhase.QUESTION_RESULT:
-                if (timeInPhase >= GAME_SETTINGS.resultTime) {
-                     updateGameState({ gamePhase: GamePhase.LEADERBOARD, phaseStartTime: Date.now() });
-                }
-                break;
-            case GamePhase.LEADERBOARD:
-                if (timeInPhase >= GAME_SETTINGS.leaderboardTime) {
-                    if (gameState.currentQuestionIndex < gameState.questions.length - 1) {
-                         updateGameState({ 
-                             currentQuestionIndex: gameState.currentQuestionIndex + 1,
-                             gamePhase: GamePhase.QUESTION_INTRO,
-                             phaseStartTime: Date.now()
-                         });
-                    } else {
-                        updateGameState({ gamePhase: GamePhase.FINAL_RESULT, phaseStartTime: Date.now() });
-                    }
-                }
-                break;
-        }
-        
-        // Timer display logic
-        const updateTimerDisplay = () => {
-             if (!gameState) return;
-             const newTimeInPhase = (Date.now() - gameState.phaseStartTime) / 1000;
-             switch(gameState.gamePhase) {
-                 case GamePhase.QUESTION_INTRO:
-                    setTimer(Math.max(0, GAME_SETTINGS.introTime - Math.floor(newTimeInPhase)));
-                    break;
-                 case GamePhase.QUESTION_ACTIVE:
-                    setTimer(Math.max(0, GAME_SETTINGS.questionTime - Math.floor(newTimeInPhase)));
-                    break;
-                 default:
-                    setTimer(0);
-             }
-        };
-        
-        interval = setInterval(updateTimerDisplay, 250);
-        return () => clearInterval(interval);
-
-    }, [gameState, processAnswers, updateGameState]);
-    
     const renderHome = () => (
         <div className="text-center">
             <h1 className="text-6xl font-bold mb-4 text-yellow-300">Quiz Quest</h1>
@@ -362,8 +260,9 @@ const HostExperience: React.FC = () => {
             </button>
         </div>
     );
-
+    
     const renderLobby = () => {
+        if (!gameCode) return null;
         const joinUrl = `${window.location.origin}${window.location.pathname}?gameCode=${gameCode}`;
         const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(joinUrl)}`;
 
@@ -393,6 +292,8 @@ const HostExperience: React.FC = () => {
         )
     };
     
+    // ... The rest of the HostExperience rendering logic is largely the same,
+    // as it just renders the state received from the server.
     const renderLoading = () => (
         <div className="text-center">
             <Spinner className="w-24 h-24 mx-auto mb-6" />
@@ -406,7 +307,6 @@ const HostExperience: React.FC = () => {
         <div className="text-center text-white">
             <p className="text-2xl">Question {gameState!.currentQuestionIndex + 1}</p>
             <h1 className="text-5xl font-bold my-8 leading-tight">{currentQuestion?.question}</h1>
-            <p className="text-9xl font-bold">{timer}</p>
         </div>
     );
 
@@ -420,9 +320,9 @@ const HostExperience: React.FC = () => {
                     <h2 className="text-3xl font-bold text-white leading-tight">{currentQuestion.question}</h2>
                 </div>
                 <div className="w-full flex justify-between items-center mb-4">
-                     <div className="text-3xl font-bold bg-white text-gray-900 rounded-full w-16 h-16 flex items-center justify-center shadow-lg">{timer}</div>
+                     <div className="text-3xl font-bold bg-white text-gray-900 rounded-full w-16 h-16 flex items-center justify-center shadow-lg">{/* Timer is now managed by server */}</div>
                      <div className="flex-grow mx-4">
-                        <ProgressBar progress={(timer / GAME_SETTINGS.questionTime) * 100} />
+                        <ProgressBar progress={100} /> {/* Progress bar can be driven by server state */}
                      </div>
                      <div className="text-lg text-white">{answersForQuestion.length} / {gameState?.players.length} Answered</div>
                 </div>
@@ -508,7 +408,12 @@ const HostExperience: React.FC = () => {
     );
 
     const renderContent = () => {
+        // If there's a gameCode but no gameState yet, we are connecting.
+        if (gameCode && !gameState) {
+             return <main className={`min-h-screen ${COLORS.purple} text-white flex flex-col items-center justify-center p-4`}><Spinner/> Connecting...</main>;
+        }
         if (!gameState) return renderHome();
+        
         switch(gameState.gamePhase) {
             case GamePhase.LOBBY: return renderLobby();
             case GamePhase.LOADING_QUESTIONS: return renderLoading();
@@ -528,7 +433,7 @@ const HostExperience: React.FC = () => {
     );
 }
 
-// --- App Router ---
+// --- App Router (No changes needed here) ---
 export default function App() {
     const [mode, setMode] = useState<'loading' | 'host' | 'player'>('loading');
     const [gameCode, setGameCode] = useState<string | null>(null);
@@ -537,7 +442,7 @@ export default function App() {
         const params = new URLSearchParams(window.location.search);
         const code = params.get('gameCode');
         if (code) {
-            setGameCode(code);
+            setGameCode(code.toUpperCase());
             setMode('player');
         } else {
             setMode('host');
