@@ -1,15 +1,12 @@
-name = "questoot-api"
-main = "quiz-quest/functions/api/game.ts"
-compatibility_date = "2023-10-30"
+# This name is for reference.
+name = "questoot"
 
-# This new line is the key to the fix
+# This tells Pages where the front-end build output is.
 pages_build_output_dir = "dist"
 
 [durable_objects]
 bindings = [
-  { name = "GAME_ROOM", class_name = "GameRoom" }
+  # The script_name is a special reference to the Functions service
+  # that Pages builds from your /functions directory.
+  { name = "GAME_ROOM", class_name = "GameRoom", script_name = "functions" }
 ]
-
-[[migrations]]
-tag = "v1"
-new_classes = ["GameRoom"]
