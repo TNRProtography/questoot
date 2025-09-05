@@ -2,7 +2,8 @@
 export default {
   content: [
     "./index.html",
-    "./**/*.{js,ts,jsx,tsx}", // This line scans all your component files
+    "./{components,services,src}/**/*.{js,ts,jsx,tsx}", // More specific patterns
+    "./App.tsx" // Specifically include App.tsx
   ],
   theme: {
     extend: {},
