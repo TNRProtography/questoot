@@ -1,20 +1,15 @@
-# This is the name of your Worker service
 name = "questoot-api"
-# This tells Wrangler where your main Worker file is located
 main = "quiz-quest/functions/api/game.ts"
-# This sets the compatibility date for the Workers runtime
 compatibility_date = "2023-10-30"
 
-# This is the most important section.
-# It tells Cloudflare that you are using Durable Objects.
+# This new line is the key to the fix
+pages_build_output_dir = "dist"
+
 [durable_objects]
-# This creates a binding named "GAME_ROOM" that points to the "GameRoom" class in your code.
-# This is what allows `env.GAME_ROOM` to work.
 bindings = [
   { name = "GAME_ROOM", class_name = "GameRoom" }
 ]
 
-# This is a migration step required to enable the Durable Object class for the first time.
 [[migrations]]
 tag = "v1"
 new_classes = ["GameRoom"]
