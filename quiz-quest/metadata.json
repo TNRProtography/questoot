@@ -1,0 +1,5 @@
+{
+  "name": "Quiz Quest",
+  "description": "A Kahoot-style general knowledge quiz game. Join with a code, compete against others, and test your knowledge in a fast-paced, fun environment powered by Gemini.",
+  "requestFramePermissions": []
+}
