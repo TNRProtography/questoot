@@ -2,8 +2,9 @@
 export default {
   content: [
     "./index.html",
-    "./{components,services,src}/**/*.{js,ts,jsx,tsx}", // More specific patterns
-    "./App.tsx" // Specifically include App.tsx
+    "./App.tsx",
+    "./components/**/*.{js,ts,jsx,tsx}",
+    "./services/**/*.{js,ts,jsx,tsx}"
   ],
   theme: {
     extend: {},
