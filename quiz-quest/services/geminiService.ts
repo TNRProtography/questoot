@@ -2,8 +2,8 @@ import { GoogleGenAI, Type } from "@google/genai";
 import type { Question } from '../types';
 import { GAME_SETTINGS } from '../constants';
 
-// The API key is now accessed via import.meta.env
-const ai = new GoogleGenAI({ apiKey: import.meta.env.VITE_GEMINI_API_KEY as string });
+// Changed back to use process.env, which is being defined by vite.config.ts
+const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY as string });
 
 export const fetchQuizQuestions = async (): Promise<Question[]> => {
   try {
