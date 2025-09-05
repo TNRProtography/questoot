@@ -1,9 +1,9 @@
-
 import { GoogleGenAI, Type } from "@google/genai";
 import type { Question } from '../types';
 import { GAME_SETTINGS } from '../constants';
 
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
+// The API key is now accessed via import.meta.env
+const ai = new GoogleGenAI({ apiKey: import.meta.env.VITE_GEMINI_API_KEY as string });
 
 export const fetchQuizQuestions = async (): Promise<Question[]> => {
   try {
